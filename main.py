@@ -1,4 +1,3 @@
-from radon.complexity import cc_visit
 import git
 import os
 import shutil
@@ -6,9 +5,11 @@ import time
 import dispy
 import json
 
-def fileComplexity(commit,theFile):
+def fileComplexity(commit,filename,theFile):
+    from radon.complexity import cc_visit
     results = cc_visit(theFile)
-    return (commit,sum([i.complexity for i in results]))
+    complexity = sum([i.complexity for i in results])
+    return (commit,filename,complexity)
 
 def writeResults(resultObj):
     with open('results.json', 'w') as outfile:
@@ -24,11 +25,14 @@ def main():
     origin = repo.create_remote('origin',REMOTE_URL)
     origin.fetch()
     origin.pull(origin.refs[-1].remote_head)
-    all_commits = list(repo.iter_commits('master', skip=50))
+    all_commits = list(repo.iter_commits('master'))
     g = git.cmd.Git(DIR_NAME)
     allComplexities = {}
     print ("Successfully pulled repository.")
-    start_time = time.time()
+
+    cluster = dispy.JobCluster(fileComplexity)
+    jobs = []
+
     for commit in all_commits:
         commitComplexities = []
         allComplexities[str(commit)] = {}
@@ -39,17 +43,22 @@ def main():
                         filename = "temp/" + blob.path
                         with open(filename) as fobj:
                             theFile = fobj.read()
-                            theCommit, complexity = fileComplexity(commit, theFile)
-                        commitComplexities.append(complexity)
-                        allComplexities[str(commit)][blob.path] = complexity
+                            job = cluster.submit(str(commit),blob.path,theFile)
+                            jobs.append(job)
                     except:
                         print("Error with file : " + blob.path)
-        totalCommitComplexity = sum(commitComplexities)
-        allComplexities[str(commit)]["total"] = totalCommitComplexity
+
+    start_time = time.time()
+    for job in jobs:
+        try:
+            commit, filename, complexity = job() # waits for job to finish and returns results
+            allComplexities[commit][filename] = complexity
+        except TypeError:
+            print("Type Error")
+
     time_taken = time.time() - start_time
     writeResults(allComplexities)
+    print("Done")
     print("Time taken to analyze "+ (str(len(allComplexities)))+" commits: " + str(time_taken))
-
-
 
 main()
